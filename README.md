@@ -17,7 +17,7 @@ whole season, condensed.
 
 ## What's in here
 
-Four small Python scripts, glued together with a Makefile.
+Five small Python scripts, glued together with a Makefile.
 
 ### `src/capture.py` - motion-aware frame capture
 
@@ -67,6 +67,30 @@ footage spans 17 min."*
 Quota note: each upload costs 1600 units of a 10000/day default quota,
 so ~6 uploads/day before Google starts saying no.
 
+### `src/livestream.py` - RTSP -> YouTube Live
+
+Streams the camera straight to YouTube Live via RTMPS. A single ffmpeg
+process; no OBS/NDI/VLC in the chain. Re-encodes video to force the
+2-second keyframe interval YouTube wants (most cameras default to 5-10s
+GOPs, which makes YouTube's transcoder unhappy and causes laggy
+playback). Mixes in a silent AAC track if the camera has no usable
+microphone.
+
+Reconnects automatically with exponential backoff (2s -> 60s, cap) if
+either side drops. Reads `YOUTUBE_STREAM_KEY` from `.env` next to the
+RTSP URL.
+
+`--stream main|sub` switches between the camera's main and substream
+(handy on cameras like the TP-Link Tapo that limit `/stream1` to one
+concurrent client - so timelapse capture can keep using the main feed
+while livestream uses the substream).
+
+`--crop W:H:X:Y` cuts a region out of the input; `--zoom-to WxH`
+scales it back to any size. Encode cost is set by the output size, not
+the input, so cropping to focus on the nest and zooming back to 1080p
+costs the same as a full-frame 1080p stream - but the viewer sees the
+bird filling the screen.
+
 ---
 
 ## Makefile targets
@@ -81,6 +105,13 @@ make timelapse [duration=3600] [heartbeat=120]
 make timelapse-loop [duration=21600] [heartbeat=120]
     # Back-to-back sessions forever (Ctrl-C to stop).
     # Default: 6h sessions, each producing its own video.
+
+make livestream [bitrate=3500k] [fps=30] [keyint=2] [stream=main|sub] \
+                [crop=W:H:X:Y] [zoom=WxH]
+    # Stream RTSP camera to YouTube Live (RTMPS). Auto-reconnects.
+    # Needs YOUTUBE_STREAM_KEY in .env.
+    # Example: focus on a 960x540 region in the center, zoom to full HD:
+    #   make livestream stream=main crop=960:540:480:270 zoom=1920x1080
 
 make scale-down file=<path-or-glob> [format=vertical|square|horizontal|phone]
     # Re-encode for social media. Globs supported. Incremental
@@ -99,9 +130,48 @@ make publish file=<path> title="..." [privacy=unlisted] \
 
 ```bash
 uv sync                                            # install deps
-echo 'CAMSTREAM_LOCAL=rtsp://user:pass@cam/...' > .env
+cat > .env <<'EOF'
+CAMSTREAM_LOCAL=rtsp://user:pass@cam/stream1
+CAMSTREAM_LIVESTREAM=rtsp://user:pass@cam/stream2  # optional, livestream-only
+YOUTUBE_STREAM_KEY=xxxx-xxxx-xxxx-xxxx-xxxx        # only for `make livestream`
+EOF
+chmod 600 .env
 mkdir -p .config/birdsnest
 # Drop a Google OAuth Desktop client_secrets.json into .config/birdsnest/
+# (only needed for `make publish`)
 ```
 
 Tested on WSL2 Ubuntu with `ffmpeg` on `$PATH`. Python >= 3.10.
+
+---
+
+## Running livestream as a system service
+
+For a dedicated always-on box (the natural home for `make livestream`),
+install the systemd unit:
+
+```bash
+# Optional: create a dedicated, unprivileged user.
+sudo useradd -r -m -d /home/birdsnest -s /bin/bash birdsnest
+sudo -u birdsnest curl -LsSf https://astral.sh/uv/install.sh | sh
+# (clone the repo, populate .env, etc., as the service user)
+
+# Install the unit (uses sensible defaults; override via env vars).
+sudo -E ./scripts/install-systemd.sh
+
+# Or, for a fully custom setup:
+BIRDSNEST_USER=birdsnest \
+BIRDSNEST_DIR=/opt/birdsnest \
+STREAM=main \
+EXTRA_ARGS="--crop 960:540:480:270 --zoom-to 1920x1080" \
+  sudo -E ./scripts/install-systemd.sh
+
+# Start it and watch logs.
+sudo systemctl enable --now birdsnest-livestream
+sudo journalctl -u birdsnest-livestream -f
+```
+
+The unit runs as the chosen user, restarts on hard failure (the script
+has its own ffmpeg-reconnect backoff for normal blips), and goes through
+`journalctl` for logs. `scripts/install-systemd.sh` is idempotent - run
+it again to update args without uninstalling.
