@@ -46,7 +46,7 @@ endif
 OUTPUT_DIR := output/scaled
 SUFFIX     := _$(WIDTH)x$(HEIGHT)
 
-.PHONY: help record timelapse timelapse-loop scale-down publish format lint check
+.PHONY: help record timelapse timelapse-loop livestream scale-down publish format lint check
 
 help:
 	@echo "Targets:"
@@ -61,6 +61,15 @@ help:
 	@echo "      Run back-to-back timelapse sessions forever (Ctrl-C to stop)."
 	@echo "      Each session is 'duration' seconds (default 6h) and produces"
 	@echo "      its own session_*.mp4 on exit before the next one starts."
+	@echo ""
+	@echo "  make livestream [bitrate=3500k] [fps=30] [keyint=2] [stream=main|sub] \\"
+	@echo "                  [crop=W:H:X:Y] [zoom=WxH]"
+	@echo "      Stream the RTSP camera to YouTube Live via RTMPS."
+	@echo "      Needs YOUTUBE_STREAM_KEY in .env. Re-encodes to enforce a"
+	@echo "      2s keyframe interval. Auto-reconnects on failure."
+	@echo "      stream=main forces /stream1 (1080p), stream=sub forces /stream2."
+	@echo "      crop+zoom let you focus on a region (e.g. crop=960:540:480:270"
+	@echo "      zoom=1920x1080 zooms the centered quarter to full HD)."
 	@echo ""
 	@echo "  make scale-down file=<path-or-glob> [format=vertical|square|horizontal|phone]"
 	@echo "      Re-encode video(s) for social media."
@@ -108,6 +117,29 @@ timelapse-loop:
 		echo "==> Session $$i done at $$(date '+%Y-%m-%d %H:%M:%S')"; \
 		i=$$((i + 1)); \
 	done
+
+# livestream: RTSP camera -> YouTube Live (RTMPS). Re-encodes to force the
+# 2s keyframe interval YouTube wants. Reads YOUTUBE_STREAM_KEY from .env.
+# `stream=main` uses /stream1 (high-res); `stream=sub` uses /stream2 (low-res,
+# safer when something else is already on the main stream). Default: whatever
+# CAMSTREAM_LIVESTREAM (or CAMSTREAM_LOCAL) resolves to in .env.
+# `crop=W:H:X:Y` cuts a region out of the input (ffmpeg crop syntax).
+# `zoom=WxH` scales the (cropped) frame to that size before encoding.
+bitrate ?= 3500k
+fps     ?= 30
+keyint  ?= 2
+stream  ?=
+crop    ?=
+zoom    ?=
+
+livestream:
+	$(PYTHON) $(SRC)/livestream.py \
+		--bitrate $(bitrate) \
+		--fps $(fps) \
+		--keyint-seconds $(keyint) \
+		$(if $(stream),--stream $(stream)) \
+		$(if $(crop),--crop $(crop)) \
+		$(if $(zoom),--zoom-to $(zoom))
 
 # ---------------------------------------------------------------------------
 # scale-down: glob-aware, incremental.
@@ -186,7 +218,7 @@ endif
 format:
 	uv run black src/
 
-lint: format
+lint:
 	uv run ruff check src/
 
 check: format lint

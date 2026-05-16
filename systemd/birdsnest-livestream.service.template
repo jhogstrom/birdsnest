@@ -1,0 +1,64 @@
+# Birdsnest livestream — system service template.
+#
+# Installed by scripts/install-systemd.sh to /etc/systemd/system/.
+# Tokens prefixed with @@ are replaced at install time.
+#
+# Logs: journalctl -u birdsnest-livestream -f
+# Edit: sudo systemctl edit birdsnest-livestream   (adds a drop-in)
+# Override the unit fully: sudo systemctl edit --full birdsnest-livestream
+
+[Unit]
+Description=Birdsnest livestream (RTSP camera -> YouTube Live)
+Documentation=https://github.com/  # (set me)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@DIR@@
+
+# uv resolves the project venv and python from pyproject.toml + uv.lock.
+# Full path because systemd uses a minimal PATH.
+ExecStart=@@UV@@ run python src/livestream.py @@EXTRA_ARGS@@
+
+# The script handles SIGTERM cleanly: stops ffmpeg, exits 0.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# The script's own backoff loop handles ffmpeg-level failures.
+# systemd is the outer safety net for hard crashes (OOM, uncaught exception).
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening: this service only needs to read its own dir, talk to the camera
+# on the LAN, and reach YouTube on the internet. Tighten everything else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Allow writing to the project dir (capture frames, session videos) but
+# nowhere else under /.
+ReadWritePaths=@@DIR@@
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+# Allow network access (camera + YouTube). Restrict to IPv4 + IPv6 only.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Capability bounding: ffmpeg + python need none of these.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Journal for both streams.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=birdsnest-livestream
+
+[Install]
+WantedBy=multi-user.target
