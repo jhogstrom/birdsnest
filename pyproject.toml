@@ -1,0 +1,28 @@
+[project]
+name = "birdsnest"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "google-api-python-client>=2.196.0",
+    "google-auth-oauthlib>=1.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+    "ruff>=0.7.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # line-too-long: black handles formatting; some long strings are fine.
+]

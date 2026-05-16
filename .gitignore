@@ -1,0 +1,17 @@
+# OAuth secrets and tokens. Never commit.
+.config/
+
+# Local env vars (RTSP URL etc).
+.env
+
+# Captured frames and stitched videos.
+output/
+
+# Python.
+__pycache__/
+*.pyc
+.ruff_cache/
+.venv/
+venv/
+
+session*.md
