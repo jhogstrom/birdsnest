@@ -53,11 +53,15 @@ help:
 	@echo "  make record [duration=15]"
 	@echo "      Record an RTSP clip directly to MP4."
 	@echo ""
-	@echo "  make timelapse [duration=3600] [heartbeat=120]"
+	@echo "  make timelapse [duration=3600] [heartbeat=120] \\"
+	@echo "                 [crop=W:H:X:Y] [motion_crop=W:H:X:Y]"
 	@echo "      Run motion-aware capture with burst on detection,"
 	@echo "      then stitch a session timelapse video."
+	@echo "      crop limits saved frames; motion_crop limits the region"
+	@echo "      used for motion detection (defaults to crop)."
 	@echo ""
-	@echo "  make timelapse-loop [duration=21600] [heartbeat=120]"
+	@echo "  make timelapse-loop [duration=21600] [heartbeat=120] \\"
+	@echo "                      [crop=W:H:X:Y] [motion_crop=W:H:X:Y]"
 	@echo "      Run back-to-back timelapse sessions forever (Ctrl-C to stop)."
 	@echo "      Each session is 'duration' seconds (default 6h) and produces"
 	@echo "      its own session_*.mp4 on exit before the next one starts."
@@ -94,7 +98,9 @@ timelapse:
 		--motion \
 		--motion-threshold 3.8 \
 		--interval $(heartbeat) \
-		--duration $(duration)
+		--duration $(duration) \
+		$(if $(crop),--crop $(crop)) \
+		$(if $(motion_crop),--motion-crop $(motion_crop))
 
 # timelapse-loop: run back-to-back capture sessions forever (Ctrl-C to stop).
 # Each iteration captures `duration` seconds (default 6h), stitches a session
@@ -113,6 +119,8 @@ timelapse-loop:
 			--motion-threshold 3.8 \
 			--interval $(heartbeat) \
 			--duration $(duration) \
+			$(if $(crop),--crop $(crop)) \
+			$(if $(motion_crop),--motion-crop $(motion_crop)) \
 			|| { echo "Session $$i exited non-zero; stopping loop." >&2; exit 1; }; \
 		echo "==> Session $$i done at $$(date '+%Y-%m-%d %H:%M:%S')"; \
 		i=$$((i + 1)); \

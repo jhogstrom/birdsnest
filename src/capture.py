@@ -17,20 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 import stitch
+from rtsp_utils import probe_input_size, redact, validate_crop
 
 LOG = logging.getLogger("capture")
-
-# Matches the "user:pass@" segment of any URL so we can scrub credentials
-# from anything we log (ffmpeg likes to echo the full URL on failures).
-_CRED_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]+@")
-
-
-def redact(text: str) -> str:
-    """Strip user:pass from URLs in arbitrary text before logging."""
-    if not text:
-        return text
-    return _CRED_RE.sub(r"\1***@", text)
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "output"
@@ -52,8 +41,14 @@ def load_env_file(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-def capture_frame(rtsp_url: str, output_path: Path, timeout: int) -> bool:
-    """Grab a single frame from the RTSP stream using ffmpeg."""
+def capture_frame(
+    rtsp_url: str, output_path: Path, timeout: int, crop: str | None = None
+) -> bool:
+    """Grab a single frame from the RTSP stream using ffmpeg.
+
+    `crop` is an ffmpeg crop expression "W:H:X:Y" applied before the JPEG
+    is written. None = full frame.
+    """
     cmd = [
         "ffmpeg",
         "-y",
@@ -67,8 +62,10 @@ def capture_frame(rtsp_url: str, output_path: Path, timeout: int) -> bool:
         "1",
         "-q:v",
         "2",
-        str(output_path),
     ]
+    if crop:
+        cmd += ["-vf", f"crop={crop}"]
+    cmd.append(str(output_path))
     try:
         result = subprocess.run(
             cmd,
@@ -91,11 +88,18 @@ def capture_frame(rtsp_url: str, output_path: Path, timeout: int) -> bool:
     return True
 
 
-def capture_fingerprint(rtsp_url: str, size: int, timeout: int) -> bytes | None:
+def capture_fingerprint(
+    rtsp_url: str, size: int, timeout: int, crop: str | None = None
+) -> bytes | None:
     """Grab one frame, downscaled to `size`x`size` grayscale raw bytes.
 
-    Used for cheap motion detection. Returns None on failure.
+    Used for cheap motion detection. Returns None on failure. If `crop`
+    is given, motion is measured on the cropped region only - useful for
+    ignoring background activity outside the nest.
     """
+    vf = f"scale={size}:{size},format=gray"
+    if crop:
+        vf = f"crop={crop},{vf}"
     cmd = [
         "ffmpeg",
         "-loglevel",
@@ -107,7 +111,7 @@ def capture_fingerprint(rtsp_url: str, size: int, timeout: int) -> bytes | None:
         "-frames:v",
         "1",
         "-vf",
-        f"scale={size}:{size},format=gray",
+        vf,
         "-f",
         "rawvideo",
         "-",
@@ -161,12 +165,14 @@ class BurstCapture:
         fps: float,
         session_frames: list[tuple[datetime, Path]],
         on_frame: Callable[[datetime, Path], None] | None = None,
+        crop: str | None = None,
     ) -> None:
         self.rtsp_url = rtsp_url
         self.output_dir = output_dir
         self.fps = fps
         self.session_frames = session_frames
         self.on_frame = on_frame
+        self.crop = crop
 
         self._proc: subprocess.Popen | None = None
         self._scratch: Path | None = None
@@ -193,6 +199,9 @@ class BurstCapture:
         self._scratch.mkdir(parents=True, exist_ok=True)
 
         pattern = str(self._scratch / "burst_%06d.jpg")
+        vf = f"fps={self.fps}"
+        if self.crop:
+            vf = f"crop={self.crop},{vf}"
         cmd = [
             "ffmpeg",
             "-loglevel",
@@ -202,7 +211,7 @@ class BurstCapture:
             "-i",
             self.rtsp_url,
             "-vf",
-            f"fps={self.fps}",
+            vf,
             "-q:v",
             "2",
             "-f",
@@ -412,6 +421,27 @@ def parse_args() -> argparse.Namespace:
         default=5.0,
         help="Frames per second for --burst mode (default: 5.0).",
     )
+    parser.add_argument(
+        "--crop",
+        default=None,
+        help=(
+            "Crop saved frames (and burst frames) to this region. Format: "
+            "W:H:X:Y (ffmpeg crop syntax). Example for /stream1 (1920x1080): "
+            "'800:800:600:200' keeps an 800x800 window starting at x=600,y=200. "
+            "Useful for focusing the output on the nest and trimming "
+            "uninteresting surroundings."
+        ),
+    )
+    parser.add_argument(
+        "--motion-crop",
+        default=None,
+        help=(
+            "Restrict motion detection to this region only (W:H:X:Y). "
+            "Independent of --crop, so you can detect motion in a tight "
+            "window around the nest while saving a wider frame. Defaults "
+            "to --crop if --crop is set."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -461,6 +491,7 @@ def run_motion_loop(
             fps=args.burst_fps,
             session_frames=session_frames,
             on_frame=_on_burst_frame,
+            crop=args.crop,
         )
 
     try:
@@ -469,7 +500,10 @@ def run_motion_loop(
             now = datetime.now()
 
             fp = capture_fingerprint(
-                rtsp_url, size=args.fingerprint_size, timeout=fp_timeout
+                rtsp_url,
+                size=args.fingerprint_size,
+                timeout=fp_timeout,
+                crop=args.motion_crop,
             )
             score = mean_abs_diff(prev_fp, fp) if (prev_fp and fp) else 0.0
 
@@ -529,7 +563,9 @@ def run_motion_loop(
             if save_reason is not None and not skip_save:
                 timestamp = now.strftime("%Y%m%d_%H%M%S")
                 out_path = args.output_dir / f"frame_{timestamp}.jpg"
-                if capture_frame(rtsp_url, out_path, timeout=args.timeout):
+                if capture_frame(
+                    rtsp_url, out_path, timeout=args.timeout, crop=args.crop
+                ):
                     captured += 1
                     if save_reason in ("initial", "heartbeat"):
                         interval_saves += 1
@@ -594,6 +630,26 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # --motion-crop defaults to --crop so the common case ("just look at
+    # the nest") is a single flag.
+    if args.motion_crop is None and args.crop is not None:
+        args.motion_crop = args.crop
+
+    if args.crop or args.motion_crop:
+        input_size = probe_input_size(rtsp_url)
+        if input_size:
+            LOG.info("Input video size: %dx%d.", *input_size)
+        else:
+            LOG.warning("Could not probe input size; skipping crop pre-check.")
+        try:
+            if args.crop:
+                validate_crop(args.crop, input_size, label="--crop")
+            if args.motion_crop and args.motion_crop != args.crop:
+                validate_crop(args.motion_crop, input_size, label="--motion-crop")
+        except ValueError as e:
+            LOG.error("%s", e)
+            return 2
+
     if args.motion:
         LOG.info(
             "Motion mode: peek every %.2fs, heartbeat every %.2fs, "
@@ -638,7 +694,7 @@ def main() -> int:
             timestamp = now.strftime("%Y%m%d_%H%M%S")
             out_path = args.output_dir / f"frame_{timestamp}.jpg"
 
-            if capture_frame(rtsp_url, out_path, timeout=args.timeout):
+            if capture_frame(rtsp_url, out_path, timeout=args.timeout, crop=args.crop):
                 captured += 1
                 session_frames.append((now, out_path))
                 LOG.info("Saved %s (%d total)", out_path.name, captured)
