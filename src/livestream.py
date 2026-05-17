@@ -22,7 +22,6 @@ Setup:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import re
@@ -31,6 +30,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from rtsp_utils import probe_input_size, redact, validate_crop
 
 LOG = logging.getLogger("livestream")
 
@@ -50,85 +51,6 @@ YT_INGEST_BACKUP = "rtmps://b.rtmp.youtube.com/live2"
 BACKOFF_BASE = 2.0
 BACKOFF_MAX = 60.0
 BACKOFF_RESET_AFTER = 120.0
-
-# Strip user:pass@ from URLs in anything we log (ffmpeg may echo them on
-# failure). Same helper as capture.py/record.py.
-_CRED_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]+@")
-# Redact the stream key segment of an RTMPS URL too -- it's effectively a
-# bearer token for your live channel.
-_STREAM_KEY_RE = re.compile(r"(rtmps?://[^/\s]+/live2?/)[^\s?]+")
-
-
-def redact(text: str) -> str:
-    if not text:
-        return text
-    text = _CRED_RE.sub(r"\1***@", text)
-    text = _STREAM_KEY_RE.sub(r"\1***", text)
-    return text
-
-
-def probe_input_size(rtsp_url: str, timeout_s: int = 8) -> tuple[int, int] | None:
-    """Return (width, height) of the first video stream, or None on failure.
-
-    Used to sanity-check --crop before launching the encoder, so we can
-    fail fast with a helpful message instead of letting ffmpeg crash mid-
-    stream-attempt.
-    """
-    try:
-        out = subprocess.check_output(
-            [
-                "ffprobe",
-                "-loglevel",
-                "error",
-                "-rtsp_transport",
-                "tcp",
-                "-timeout",
-                "5000000",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "json",
-                rtsp_url,
-            ],
-            stderr=subprocess.PIPE,
-            timeout=timeout_s,
-        )
-    except (
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-    ):
-        return None
-    try:
-        data = json.loads(out)
-        s = data["streams"][0]
-        return int(s["width"]), int(s["height"])
-    except (KeyError, IndexError, ValueError, json.JSONDecodeError):
-        return None
-
-
-def validate_crop(crop: str, input_size: tuple[int, int] | None) -> None:
-    """Raise ValueError if crop is malformed or wouldn't fit input_size."""
-    parts = crop.split(":")
-    if len(parts) != 4 or not all(p.lstrip("-").isdigit() for p in parts):
-        raise ValueError(f"--crop must be W:H:X:Y (integers), got {crop!r}")
-    w, h, x, y = (int(p) for p in parts)
-    if w <= 0 or h <= 0:
-        raise ValueError(f"--crop W and H must be positive, got {w}x{h}")
-    if x < 0 or y < 0:
-        raise ValueError(f"--crop X and Y must be non-negative, got x={x} y={y}")
-    if input_size is None:
-        # Couldn't probe; let ffmpeg be the final judge.
-        return
-    iw, ih = input_size
-    if w + x > iw or h + y > ih:
-        raise ValueError(
-            f"--crop {crop} doesn't fit input {iw}x{ih} "
-            f"(need x+w<={iw}, y+h<={ih}; got x+w={x + w}, y+h={y + h}). "
-            "Tip: --stream main is 1080p, --stream sub is typically 640x360."
-        )
 
 
 def load_env_file(path: Path) -> None:

@@ -6,23 +6,14 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
+from rtsp_utils import redact
+
 LOG = logging.getLogger("record")
-
-# Strip user:pass@ from URLs in anything we log (ffmpeg likes to echo the
-# full URL on failures).
-_CRED_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]+@")
-
-
-def redact(text: str) -> str:
-    if not text:
-        return text
-    return _CRED_RE.sub(r"\1***@", text)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

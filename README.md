@@ -36,6 +36,15 @@ A periodic heartbeat frame ensures the timelapse keeps moving even
 during quiet stretches. On exit it hands the collected frames to the
 stitcher.
 
+`--crop W:H:X:Y` restricts saved frames (and burst frames) to a region
+of the input; useful when the camera shows more than just the nest.
+`--motion-crop W:H:X:Y` restricts the motion-detection fingerprint to
+a region only, so background activity (wind, shadows, neighbouring
+branches) doesn't trigger false positives. `--motion-crop` defaults
+to `--crop` if only `--crop` is given. Example: `--crop 800:800:600:200`
+on the 1920×1080 main stream keeps an 800×800 window around the nest
+for both saved frames and motion detection.
+
 ### `src/stitch.py` - ffmpeg-based stitcher
 
 Takes a list of timestamped frames and builds an MP4. Two modes:
