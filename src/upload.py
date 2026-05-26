@@ -372,8 +372,17 @@ def upload_video(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("video", type=Path, help="Path to the video file to upload.")
-    p.add_argument("--title", required=True, help="Video title (max 100 chars).")
+    p.add_argument(
+        "video",
+        type=Path,
+        nargs="?",
+        help="Path to the video file to upload. Omit with --auth-only.",
+    )
+    p.add_argument(
+        "--title",
+        default=None,
+        help="Video title (max 100 chars). Required unless --auth-only.",
+    )
     p.add_argument(
         "--description",
         default="",
@@ -416,6 +425,15 @@ def parse_args() -> argparse.Namespace:
         default=TOKEN_FILE_DEFAULT,
         help=f"Where to cache the OAuth token (default: {TOKEN_FILE_DEFAULT}).",
     )
+    p.add_argument(
+        "--auth-only",
+        action="store_true",
+        help=(
+            "Run the OAuth flow (or refresh the cached token) and exit "
+            "without uploading. Use after revoking access, switching "
+            "Google accounts, or to pre-warm the token for an automated run."
+        ),
+    )
     return p.parse_args()
 
 
@@ -426,6 +444,18 @@ def main() -> int:
     args = parse_args()
     _check_deps()
 
+    if args.auth_only:
+        LOG.info("Auth-only mode: refreshing token (browser opens if needed).")
+        get_authenticated_service(args.client_secrets, args.token_file)
+        LOG.info("Token at %s is valid.", args.token_file)
+        return 0
+
+    if args.video is None:
+        LOG.error("video path is required (or pass --auth-only).")
+        return 2
+    if not args.title:
+        LOG.error("--title is required (or pass --auth-only).")
+        return 2
     if not args.video.exists():
         LOG.error("Video not found: %s", args.video)
         return 2

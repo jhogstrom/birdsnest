@@ -46,7 +46,7 @@ endif
 OUTPUT_DIR := output/scaled
 SUFFIX     := _$(WIDTH)x$(HEIGHT)
 
-.PHONY: help record timelapse timelapse-loop livestream scale-down publish format lint check
+.PHONY: help record timelapse timelapse-loop livestream scale-down publish auth format lint check
 
 help:
 	@echo "Targets:"
@@ -87,6 +87,12 @@ help:
 	@echo "                                       [description=\"...\"] [tags=...]"
 	@echo "      Upload a video to YouTube. First run opens browser for OAuth."
 	@echo "      Privacy defaults to unlisted (safer for automated runs)."
+	@echo ""
+	@echo "  make auth"
+	@echo "      Refresh the YouTube OAuth token (or run the browser flow if"
+	@echo "      the refresh token was revoked). No upload. Use after a"
+	@echo "      'Token has been expired or revoked' error or when switching"
+	@echo "      Google accounts."
 
 record: duration ?= 15
 record:
@@ -218,6 +224,13 @@ endif
 		--privacy $(privacy) \
 		$(if $(description),--description "$(description)") \
 		$(if $(tags),--tags "$(tags)")
+
+# auth: refresh (or re-authorize) the YouTube OAuth token without uploading.
+# Useful after revoking access in Google Account settings, switching the
+# logged-in Google account, or when an automated run is about to fire and
+# you want to make sure the refresh token still works.
+auth:
+	$(PYTHON) $(SRC)/upload.py --auth-only
 
 # ---------------------------------------------------------------------------
 # Code quality.
