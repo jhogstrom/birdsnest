@@ -247,6 +247,33 @@ def _check_deps() -> None:
         sys.exit(2)
 
 
+def _save_token(creds, token_file: Path) -> None:
+    """Persist credentials to token_file atomically with 0600 perms.
+
+    O_EXCL + replace dance: write to a sibling tempfile, then rename.
+    This way the refresh token never exists on disk with world-readable
+    perms, and a crash mid-write can't truncate the existing token.
+    """
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=token_file.name + ".",
+        dir=str(token_file.parent),
+    )
+    try:
+        os.chmod(tmp_name, 0o600)
+        with os.fdopen(tmp_fd, "w") as fh:
+            fh.write(creds.to_json())
+        os.replace(tmp_name, token_file)
+    except Exception:
+        # Best-effort cleanup of the tempfile on failure.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    LOG.info("Saved token to %s", token_file)
+
+
 def get_authenticated_service(client_secrets: Path, token_file: Path):
     """Return an authorized YouTube API client. Triggers browser flow if needed."""
     from google.auth.transport.requests import Request
@@ -270,6 +297,9 @@ def get_authenticated_service(client_secrets: Path, token_file: Path):
         LOG.info("Refreshing access token.")
         try:
             creds.refresh(Request())
+            # Persist the refreshed access token (and any rotated refresh
+            # token) so the next process doesn't burn another refresh call.
+            _save_token(creds, token_file)
         except Exception as exc:  # noqa: BLE001
             LOG.warning("Refresh failed (%s); re-authorizing.", exc)
             creds = None
@@ -286,27 +316,7 @@ def get_authenticated_service(client_secrets: Path, token_file: Path):
         # run_local_server spins up a tiny web server on localhost to catch
         # the OAuth redirect; works on a desktop with a browser available.
         creds = flow.run_local_server(port=0, open_browser=True)
-        token_file.parent.mkdir(parents=True, exist_ok=True)
-        # Atomically create the token file with 0600 from the start, so the
-        # refresh token never exists on disk with world-readable perms.
-        # O_EXCL + replace dance: write to a sibling tempfile, then rename.
-        tmp_fd, tmp_name = tempfile.mkstemp(
-            prefix=token_file.name + ".",
-            dir=str(token_file.parent),
-        )
-        try:
-            os.chmod(tmp_name, 0o600)
-            with os.fdopen(tmp_fd, "w") as fh:
-                fh.write(creds.to_json())
-            os.replace(tmp_name, token_file)
-        except Exception:
-            # Best-effort cleanup of the tempfile on failure.
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
-        LOG.info("Saved token to %s", token_file)
+        _save_token(creds, token_file)
 
     return build(API_SERVICE, API_VERSION, credentials=creds)
 
