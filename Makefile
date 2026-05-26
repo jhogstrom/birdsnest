@@ -243,3 +243,6 @@ lint:
 	uv run ruff check src/
 
 check: format lint
+-include .env
+copy-token:
+	scp $(TOKEN_PATH) $(MEDIA_USER)@$(MEDIA_HOST):$(MEDIA_TOKEN_PATH)
