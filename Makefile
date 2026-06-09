@@ -9,6 +9,7 @@
 #   make publish file=output/foo.mp4 title="..." [privacy=unlisted] \
 #                [description="..."] [tags=birds,nest]
 
+-include .env
 PYTHON ?= uv run python
 SRC := src
 
@@ -87,6 +88,15 @@ help:
 	@echo "                                       [description=\"...\"] [tags=...]"
 	@echo "      Upload a video to YouTube. First run opens browser for OAuth."
 	@echo "      Privacy defaults to unlisted (safer for automated runs)."
+	@echo ""
+	@echo "  make publish-all"
+	@echo "      Upload all videos to YouTube. Newest first"
+	@echo ""
+	@echo "  make copy-token"
+	@echo "      Copy the YouTube OAuth token to the media server."
+	@echo "      Useful if the media server is running the upload and "
+	@echo "      you want to authenticate from a different machine (e.g. your laptop)."
+	@echo "      Requires MEDIA_USER, MEDIA_HOST, and MEDIA_TOKEN_PATH in .env."
 	@echo ""
 	@echo "  make auth"
 	@echo "      Refresh the YouTube OAuth token (or run the browser flow if"
@@ -225,6 +235,11 @@ endif
 		$(if $(description),--description "$(description)") \
 		$(if $(tags),--tags "$(tags)")
 
+
+.PHONY: publish-all
+publish-all:
+	./publish_all.sh
+
 # auth: refresh (or re-authorize) the YouTube OAuth token without uploading.
 # Useful after revoking access in Google Account settings, switching the
 # logged-in Google account, or when an automated run is about to fire and
@@ -243,3 +258,6 @@ lint:
 	uv run ruff check src/
 
 check: format lint
+
+copy-token:
+	scp $(TOKEN_PATH) $(MEDIA_USER)@$(MEDIA_HOST):$(MEDIA_TOKEN_PATH)
